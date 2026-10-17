@@ -1,4 +1,6 @@
-const MODEL = process.env.LLM_MODEL || "gemini-2.5-flash";
+const MODEL = process.env.LLM_MODEL || "gemini-3.8-flash";
+
+const profileCache = new Map();
 
 export function fallbackProfile(topics) {
   return {
@@ -39,9 +41,19 @@ function clean(raw, topics) {
 }
 
 export async function extractProfile(topics, freeText) {
-  if (!process.env.LLM_API_KEY || !freeText.trim()) {
+  if (
+    process.env.USE_MOCK_LLM === "true" ||
+    !process.env.LLM_API_KEY ||
+    !freeText.trim()
+  ) {
     return fallbackProfile(topics);
   }
+
+  const cacheKey = JSON.stringify([
+    [...topics].sort(),
+    freeText.trim().toLowerCase(),
+  ]);
+  if (profileCache.has(cacheKey)) return profileCache.get(cacheKey);
 
   const prompt = `You build reader profiles for a personalized daily newspaper.
 The reader picked these topics: ${topics.join(", ")}
@@ -81,7 +93,9 @@ Rules:
     const data = await res.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
     const json = text.replace(/```json|```/g, "").trim();
-    return clean(JSON.parse(json), topics);
+    const profile = clean(JSON.parse(json), topics);
+    profileCache.set(cacheKey, profile);
+    return profile;
   } catch (err) {
     console.error("extractProfile failed, using fallback:", err.message);
     return fallbackProfile(topics);

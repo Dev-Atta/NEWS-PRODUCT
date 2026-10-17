@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import cors from "cors";
 import dotenv from "dotenv";
 import userRoutes from "./routes/users.js";
+import paperRoutes from "./routes/paper.js";
 
 dotenv.config();
 
@@ -15,6 +16,7 @@ app.get("/api/health", (req, res) => {
 });
 
 app.use("/api", userRoutes);
+app.use("/api", paperRoutes);
 
 mongoose
   .connect(process.env.MONGO_URI)

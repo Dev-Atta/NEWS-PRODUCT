@@ -2,7 +2,7 @@ import express from "express";
 import mongoose from "mongoose";
 import User from "../models/User.js";
 import { extractProfile } from "../services/llm.js";
-
+import { clearPaperCache } from "./paper.js";
 const router = express.Router();
 
 // Create a user from onboarding answers
@@ -64,6 +64,7 @@ router.put("/users/:id", async (req, res) => {
     res.json({ user });
   } catch (err) {
     console.error(err);
+        clearPaperCache(req.params.id);
     res.status(400).json({ error: "Could not save changes" });
   }
 });
