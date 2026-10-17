@@ -1,6 +1,7 @@
 const MODEL = process.env.LLM_MODEL || "gemini-3.8-flash";
 
 const profileCache = new Map();
+const suggestionCache = new Map();
 
 export function fallbackProfile(topics) {
   return {
@@ -99,5 +100,76 @@ Rules:
   } catch (err) {
     console.error("extractProfile failed, using fallback:", err.message);
     return fallbackProfile(topics);
+  }
+}
+
+// Simple suggestions used when Gemini is off or fails
+function fallbackSuggestions(topics) {
+  const [a, b, c] = topics;
+  const out = [];
+  if (a && b) out.push(`I want the latest ${a} and ${b} news, with short summaries.`);
+  if (c) out.push(`Mostly ${c} stories, and nothing about celebrity gossip.`);
+  out.push(`Only the big ${a || "world"} headlines, explained simply.`);
+  out.push(`Surprise me with something new about ${b || a || "the world"}.`);
+  return out.slice(0, 3);
+}
+
+// Returns 3 short example sentences the reader can click, based on their topics
+export async function suggestPrompts(topics) {
+  if (process.env.USE_MOCK_LLM === "true" || !process.env.LLM_API_KEY) {
+    return fallbackSuggestions(topics);
+  }
+
+  const cacheKey = [...topics].sort().join("|").toLowerCase();
+  if (suggestionCache.has(cacheKey)) return suggestionCache.get(cacheKey);
+
+  const prompt = `A reader is setting up a personalized daily newspaper.
+They picked these topics: ${topics.join(", ")}
+
+Write 3 different example sentences they could click to describe what they want to read.
+Return ONLY a JSON object in exactly this shape:
+{ "suggestions": ["...", "...", "..."] }
+
+Rules:
+- Written in first person, like "I want ...".
+- Each is under 20 words.
+- Specific to their topics (name real subtopics, tools, or themes), not generic.
+- Exactly one of the three says something they do NOT want to see.
+- Plain text only, no quotes inside the sentences.`;
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": process.env.LLM_API_KEY,
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json" },
+        }),
+        signal: AbortSignal.timeout(12000),
+      }
+    );
+
+    if (!res.ok) throw new Error(`LLM HTTP ${res.status}: ${await res.text()}`);
+
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
+
+    const suggestions = (Array.isArray(parsed.suggestions) ? parsed.suggestions : [])
+      .filter((s) => typeof s === "string" && s.trim())
+      .map((s) => s.trim().slice(0, 160))
+      .slice(0, 3);
+
+    if (suggestions.length === 0) return fallbackSuggestions(topics);
+    suggestionCache.set(cacheKey, suggestions);
+    return suggestions;
+  } catch (err) {
+    console.error("suggestPrompts failed, using fallback:", err.message);
+    return fallbackSuggestions(topics);
   }
 }

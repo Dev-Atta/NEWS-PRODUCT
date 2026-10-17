@@ -5,6 +5,8 @@ import cors from "cors";
 import userRoutes from "./routes/users.js";
 import paperRoutes from "./routes/paper.js";
 import feedbackRoutes from "./routes/feedback.js";
+import archiveRoutes from "./routes/archive.js";
+import pdfRoutes from "./routes/pdf.js";
 
 const app = express();
 app.use(cors());
@@ -17,6 +19,8 @@ app.get("/api/health", (req, res) => {
 app.use("/api", userRoutes);
 app.use("/api", paperRoutes);
 app.use("/api", feedbackRoutes);
+app.use("/api", archiveRoutes);
+app.use("/api", pdfRoutes);
 
 mongoose
   .connect(process.env.MONGO_URI)

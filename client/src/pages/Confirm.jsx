@@ -1,26 +1,42 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api.js";
+import { usePaper } from "../context/paperContext.js";
 
 export default function Confirm() {
   const navigate = useNavigate();
+  const { signOut, resetPaper } = usePaper();
   const userId = localStorage.getItem("userId");
   const [user, setUser] = useState(null);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!userId) return navigate("/onboarding");
+    if (!userId) {
+      navigate("/welcome", { replace: true });
+      return;
+    }
     api
       .get(`/users/${userId}`)
       .then(({ data }) => setUser(data.user))
-      .catch(() => {
-        localStorage.removeItem("userId");
-        navigate("/onboarding");
+      .catch((err) => {
+        const status = err.response?.status;
+        if (status === 404 || status === 400) {
+          signOut();
+          navigate("/welcome", { replace: true });
+        } else {
+          setError("Could not load your profile. Is the server running?");
+        }
       });
-  }, [userId, navigate]);
+  }, [userId, navigate, signOut]);
 
-  if (!user) return <div className="page">Loading...</div>;
+  if (!user) {
+    return (
+      <div className="page">
+        {error ? <p className="error">{error}</p> : "Loading..."}
+      </div>
+    );
+  }
 
   const removeInterest = (keyword) =>
     setUser({
@@ -48,6 +64,7 @@ export default function Confirm() {
         excludes: user.excludes,
         preferences: user.preferences,
       });
+      resetPaper(); // the profile changed, so show a fresh paper
       navigate("/paper");
     } catch {
       setError("Could not save. Try again.");
