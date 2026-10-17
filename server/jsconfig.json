@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "target": "es2022",
+    "forceConsistentCasingInFileNames": false
+  },
+  "include": ["**/*.js"],
+  "exclude": ["node_modules"]
+}

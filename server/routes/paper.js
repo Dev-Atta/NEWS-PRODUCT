@@ -1,7 +1,9 @@
 import express from "express";
 import mongoose from "mongoose";
 import User from "../models/User.js";
+import Feedback from "../models/UserFeedback.js";
 import { fetchArticles } from "../services/news.js";
+import { summarizeArticles } from "../services/summarize.js";
 
 const router = express.Router();
 
@@ -12,10 +14,17 @@ const LIVE_TTL = 60 * 60 * 1000; // keep a live paper for 1 hour
 const MOCK_TTL = 5 * 60 * 1000; // keep a sample paper for 5 minutes
 
 const paperCache = new Map(); // userId -> { data, expires }
-const pending = new Map(); // userId -> promise of a paper being built
+const pending = new Map(); // userId -> paper being built
 
 export function clearPaperCache(userId) {
   paperCache.delete(String(userId));
+}
+
+function store(id, base) {
+  paperCache.set(id, {
+    data: base,
+    expires: Date.now() + (base.usedMock ? MOCK_TTL : LIVE_TTL),
+  });
 }
 
 function score(article) {
@@ -29,7 +38,12 @@ async function buildPaper(userId) {
   if (!found) return null;
   const user = found.toObject();
 
+  const dislikedDocs = await Feedback.find({ userId, value: "dislike" }).select("url");
+  const disliked = new Set(dislikedDocs.map((f) => f.url));
+
+  // Interests with weight 0 are muted. Take the strongest few.
   const top = [...user.interests]
+    .filter((i) => i.weight > 0)
     .sort((a, b) => b.weight - a.weight)
     .slice(0, MAX_INTERESTS);
 
@@ -50,7 +64,7 @@ async function buildPaper(userId) {
   const seen = new Set();
   let articles = batches.flat().filter((a) => {
     const titleKey = a.title.toLowerCase();
-    if (seen.has(a.url) || seen.has(titleKey)) return false;
+    if (disliked.has(a.url) || seen.has(a.url) || seen.has(titleKey)) return false;
     seen.add(a.url);
     seen.add(titleKey);
     return true;
@@ -71,12 +85,36 @@ async function buildPaper(userId) {
     })
     .slice(0, MAX_TOTAL);
 
-  return {
+  // One AI call for the whole page
+  const { brief, summaries } = await summarizeArticles(
     articles,
-    interests: top.map((i) => i.keyword),
-    usedMock,
-    generatedAt: new Date().toISOString(),
-  };
+    user.preferences?.summaryLength || "short",
+    top.map((i) => i.keyword)
+  );
+  articles = articles.map((a, i) => ({ ...a, summary: summaries[i] }));
+
+  return { articles, brief, usedMock, generatedAt: new Date().toISOString() };
+}
+
+// Adds the reader's current likes, dislikes and weights to a built paper
+async function compose(id, base) {
+  const [feedback, user] = await Promise.all([
+    Feedback.find({ userId: id }).select("url value"),
+    User.findById(id).select("interests"),
+  ]);
+
+  const state = {};
+  feedback.forEach((f) => (state[f.url] = f.value));
+
+  const articles = base.articles
+    .filter((a) => state[a.url] !== "dislike")
+    .map((a) => ({ ...a, feedback: state[a.url] || null }));
+
+  const interests = [...(user?.interests || [])]
+    .sort((a, b) => b.weight - a.weight)
+    .map((i) => ({ keyword: i.keyword, weight: i.weight }));
+
+  return { ...base, articles, interests };
 }
 
 router.get("/paper/:id", async (req, res) => {
@@ -85,25 +123,43 @@ router.get("/paper/:id", async (req, res) => {
     return res.status(400).json({ error: "Invalid id" });
   }
 
-  const hit = paperCache.get(id);
-  if (hit && hit.expires > Date.now()) return res.json(hit.data);
-
   try {
-    // If a paper is already being built for this user, wait for it
-    if (!pending.has(id)) {
-      pending.set(id, buildPaper(id).finally(() => pending.delete(id)));
-    }
-    const data = await pending.get(id);
-    if (!data) return res.status(404).json({ error: "User not found" });
+    let base;
+    const hit = paperCache.get(id);
 
-    paperCache.set(id, {
-      data,
-      expires: Date.now() + (data.usedMock ? MOCK_TTL : LIVE_TTL),
-    });
-    res.json(data);
+    if (hit && hit.expires > Date.now()) {
+      base = hit.data;
+    } else {
+      if (!pending.has(id)) {
+        pending.set(id, buildPaper(id).finally(() => pending.delete(id)));
+      }
+      base = await pending.get(id);
+      if (!base) return res.status(404).json({ error: "User not found" });
+      store(id, base);
+    }
+
+    res.json(await compose(id, base));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Could not build your paper" });
+  }
+});
+
+// Rebuild using the latest weights and dislikes
+router.post("/paper/:id/refresh", async (req, res) => {
+  const id = req.params.id;
+  if (!mongoose.isValidObjectId(id)) {
+    return res.status(400).json({ error: "Invalid id" });
+  }
+
+  try {
+    const base = await buildPaper(id);
+    if (!base) return res.status(404).json({ error: "User not found" });
+    store(id, base);
+    res.json(await compose(id, base));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Could not update your paper" });
   }
 });
 

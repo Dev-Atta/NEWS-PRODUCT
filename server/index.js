@@ -1,11 +1,10 @@
+import "dotenv/config";
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
-import dotenv from "dotenv";
 import userRoutes from "./routes/users.js";
 import paperRoutes from "./routes/paper.js";
-
-dotenv.config();
+import feedbackRoutes from "./routes/feedback.js";
 
 const app = express();
 app.use(cors());
@@ -17,6 +16,7 @@ app.get("/api/health", (req, res) => {
 
 app.use("/api", userRoutes);
 app.use("/api", paperRoutes);
+app.use("/api", feedbackRoutes);
 
 mongoose
   .connect(process.env.MONGO_URI)
